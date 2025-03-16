@@ -6,13 +6,14 @@ import { sha256 } from "@oslojs/crypto/sha2";
 
 import { configDotenv } from "dotenv";
 configDotenv();
+
 import { db } from "../src/db/index.ts";
+import Cookies from "universal-cookie";
 
 export function generateSessionToken(): string {
   const bytes = new Uint8Array(20);
   crypto.getRandomValues(bytes);
   const token = encodeBase32LowerCaseNoPadding(bytes);
-  //   console.log(token);
   return token;
 }
 
@@ -32,51 +33,84 @@ export async function createSession(
     values: [session.id, session.userId, session.expiresAt],
   };
 
-  await db.connect();
   await db.query(query);
-  await db.end();
   return session;
 }
 
-// export async function validateSessionToken(token: string): Promise<SessionValidationResult> {
-// 	const sessionId = encodeHexLowerCase(sha256(new TextEncoder().encode(token)));
-// 	const row = await db.queryOne(
-// 		"SELECT user_session.id, user_session.user_id, user_session.expires_at, app_user.id FROM user_session INNER JOIN user ON app_user.id = user_session.user_id WHERE id = ?",
-// 		sessionId
-// 	);
-// 	if (row === null) {
-// 		return { session: null, user: null };
-// 	}
-// 	const session: Session = {
-// 		id: row[0],
-// 		userId: row[1],
-// 		expiresAt: row[2]
-// 	};
-// 	const user: User = {
-// 		id: row[3]
-// 	};
-// 	if (Date.now() >= session.expiresAt.getTime()) {
-// 		await db.execute("DELETE FROM user_session WHERE id = ?", session.id);
-// 		return { session: null, user: null };
-// 	}
-// 	if (Date.now() >= session.expiresAt.getTime() - 1000 * 60 * 60 * 24 * 15) {
-// 		session.expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
-// 		await db.execute(
-// 			"UPDATE user_session SET expires_at = ? WHERE id = ?",
-// 			session.expiresAt,
-// 			session.id
-// 		);
-// 	}
-// 	return { session, user };
-// }
+export async function validateSessionToken(
+  token: string
+): Promise<SessionValidationResult> {
+  const sessionId = encodeHexLowerCase(sha256(new TextEncoder().encode(token)));
+  console.log(sessionId);
+  const row: any = await db.query(
+    `SELECT 
+    user_session.id, user_session.user_id, user_session.expires_at, app_user.id 
+    FROM user_session 
+    INNER JOIN app_user 
+    ON app_user.id = user_session.user_id 
+    WHERE user_session.id = ($1)`,
+    [sessionId]
+  );
 
-// export async function invalidateSession(sessionId: string): Promise<void> {
-// 	await db.execute("DELETE FROM user_session WHERE id = ?", sessionId);
-// }
+  if (row.rowCount === 0) {
+    return { session: null, user: null };
+  }
+  const session: Session = {
+    id: row[0].id,
+    userId: row[0].user_id,
+    expiresAt: row[0].expires_at,
+  };
 
-// export async function invalidateAllSessions(userId: number): Promise<void> {
-// 	await db.execute("DELETE FROM user_session WHERE user_id = ?", userId);
-// }
+  const user: User = {
+    id: row[0].id,
+  };
+
+  if (Date.now() >= session.expiresAt.getTime()) {
+    await db.query("DELETE FROM user_session WHERE id = $1", [session.id]);
+    return { session: null, user: null };
+  }
+  if (Date.now() >= session.expiresAt.getTime() - 1000 * 60 * 60 * 24 * 15) {
+    session.expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+    await db.query("UPDATE user_session SET expires_at = $1 WHERE id = $2", [
+      session.expiresAt,
+      session.id,
+    ]);
+  }
+  return { session, user };
+}
+
+export async function invalidateSession(sessionId: string): Promise<void> {
+  await db.query("DELETE FROM user_session WHERE id = $1", [sessionId]);
+}
+
+export async function invalidateAllSessions(userId: number): Promise<void> {
+  await db.query("DELETE FROM user_session WHERE user_id = $1", [userId]);
+}
+
+export async function setSessionTokenCookie(
+  token: string,
+  expiresAt: Date
+): Promise<void> {
+  const cookie = new Cookies();
+  cookie.set("session", token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    expires: expiresAt,
+    path: "/",
+  });
+}
+
+export async function deleteSessionTokenCookie(): Promise<void> {
+  const cookie = new Cookies();
+  cookie.set("session", "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 0,
+    path: "/",
+  });
+}
 
 export type SessionValidationResult =
   | { session: Session; user: User }
@@ -91,10 +125,3 @@ export interface Session {
 export interface User {
   id: number;
 }
-
-const s = async () => {
-  const res = await createSession(generateSessionToken(), 1);
-  console.log(res);
-};
-
-s();
