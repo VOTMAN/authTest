@@ -1,12 +1,12 @@
-import { createSession, generateSessionToken } from "../backend/sessionApi.ts";
+import {Link } from "react-router-dom"
 
 function App() {
-  generateSessionToken();
-  return (
+  return(
     <div>
-      <button>Click here</button>
+      <h1 className="text-2xl">HomePage</h1>
+      <Link to="/signup">Signup</Link>
     </div>
-  );
+  )
 }
 
 export default App;
